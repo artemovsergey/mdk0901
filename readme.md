@@ -10,10 +10,11 @@
 - Лекция: Обзор фронтенд и бекенд разработки. Презентация
   Настройка VS Code (Prettier, LiveServer, ImagePreview)
 
-- Лекция 1. HTML Document Structure(html,head,body)
+- Лекция 1. Основы HTML 
+    HTML Document Structure(html,head,body)
     Текстовые элементы(h1-h6, p, b и strong, i и em, ol,ul,li)
-    Html: Изображения(img)
-    Html: Навигация. Hyperlinks(a). 
+    Изображения(img)
+    Навигация. Hyperlinks(a). 
     Структура страницы(div, nav, header, footer, article, aside)
 
 - Практическая работа 1. Challenge1.  По скриншоту воостановить структуру HTML. В папке есть ресурсы
