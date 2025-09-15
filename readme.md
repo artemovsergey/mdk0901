@@ -5,17 +5,67 @@
 - Лекция 3. Современные подходы к разработке приложений (SPA, REST, CI/CD)
 - Лекция 4. Анализ архитектурных стилей
 
-# Модуль 2. Основы HTML,CSS
+# Модуль 2. Основы HTML
 
-- Лекция 5. HTML: структура документа
-- Практическая работа 1. Верстка простой страницы
-- Лекция 6. HTML: форма, семантика, таблицы
-- Практическая работа 2. Создание формы регистрации
-- Самостоятельная работа. Разметка личной страницы
-- Лекция 7. CSS: селекторы, каскад, наследование
-- Практическая работа 3. Стилизация страницы
+- Лекция: Обзор фронтенд и бекенд разработки. Презентация
+  Настройка VS Code (Prettier, LiveServer, ImagePreview)
+
+- Лекция 1. HTML Document Structure(html,head,body)
+    Текстовые элементы(h1-h6, p, b и strong, i и em, ol,ul,li)
+    Html: Изображения(img)
+    Html: Навигация. Hyperlinks(a). 
+    Структура страницы(div, nav, header, footer, article, aside)
+
+- Практическая работа 1. Challenge1.  По скриншоту воостановить структуру HTML. В папке есть ресурсы
+- Практичесская работа 2. Challenge2. Создание аналога компонента карточки товара
+
+- Лекция 2. HTML: формы, таблицы
+- Практическая работа 3. Создание формы регистрации и авторизации
+
+- Самостоятельная работа. HTML5
+
+# Модуль 3. Css и Scss
+
+- Лекция 3. CSS: Презентация
+
+    inline,internal and external css
+    styling text(font-size,font-style,font-family,text-transform)
+    комбинация селекторов
+    class и id selectors
+
+- Лекция 4. CSS. Colors. Презентация
+
+    rgb, rgba
+    #00ffff - hexadecimal notation
+    color
+    background-color
+    border
+    pseudo class(first-child;last-child)
+    styling link(a:link, a:hover, a:visited, a:active)
+    
+  Лекция 5. Chrome DevTools
+  Лекция 6. Приоритет селекторов. Презентация
+  Лекция 7. Наследование. Универсальный селектор.
+- Практическая работа 3. Приминение стилей к карточке товара. Callenge3
+
+- Лекция 8. Box Model. Презентация
+- Лекция 9. Использование margin и padding. Инструменты разработчика. Схлопывание margin
+
+
 - Лекция 8. CSS: Flexbox, Grid, адаптивная верстка
 - Практическая работа 4. Создание адаптивного макета
+
+- Практическая работа. Challenge1
+- Практическая работа. Challenge2
+- Практическая работа. Challenge3
+
+# Модуль 4. Layouts, Flexbox, Grid
+ 
+# Модуль 5. Web Design
+
+# Модуль 6. Components and Layout Pattern
+
+# Модуль 7. Practice. Omnifood
 
 # Модуль 3. Основы Typescript
 
