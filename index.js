@@ -1,9 +1,6 @@
-let fruits = ["Яблоко", "Апельсин", "Груша", 2, true, {name:"John", surname: "Wick"}];
+import IV234 from './iv234.js'
 
-var user = fruits[5]
-
-delete user.name
-
-console.log(user)
-
+let polina = new IV234("Polina", 18, "Студент");
+console.log(polina);
+console.log(IV234.getOwner());
 
