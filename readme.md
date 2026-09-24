@@ -3,7 +3,7 @@
 
 # Тестирование
 
-<a href="http://prep.scc/cgi-bin/testm/view.pl?prep=asv&grp=iv-244&prd=0370">ИВ244</a>
+<a href="http://prep.scc/cgi-bin/testm/view.pl?prep=asv&grp=iv244&prd=0370">ИВ244</a>
 
 # Объем
 
