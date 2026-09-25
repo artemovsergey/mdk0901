@@ -3,7 +3,7 @@
 
 # Тестирование
 
-<a href="http://prep.scc/cgi-bin/testm/view.pl?prep=asv&grp=iv-234&prd=0370">ИВ234</a>
+- **ИВ-244:** <a href="http://prep.scc/cgi-bin/testm/view.pl?prep=asv&grp=iv244&prd=0370">тестирование</a> · <a href="http://prep.scc/cgi-bin/testm/jrn.pl?prep=asv&sp=0907&grp=iv244&prd=0370">журнал</a> · <a href="http://prep.scc/cgi-bin/testm/jrn_reyting.pl?prep=asv&sp=0907&grp=iv244&prd=0370">рейтинг</a>
 
 # Объем
 
