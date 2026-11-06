@@ -1,3 +1,11 @@
 promt.md
 course_work
 tests
+
+# временные артефакты сборки презентаций
+_*.py
+_*.txt
+_tmp_slides/
+tools/_*.py
+__pycache__/
+*.pyc
