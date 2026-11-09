@@ -43,6 +43,65 @@ FONT_BODY = "Segoe UI"
 FONT_CODE = "Consolas"
 
 
+def split_paragraph(text, limit=700):
+    """Делит слишком длинный абзац по предложениям на части до limit символов."""
+    if len(text) <= limit:
+        return [text]
+    parts = []
+    current = ""
+    for sent in re.split(r"(?<=[.!?])\s+", text):
+        if current and len(current) + len(sent) + 1 > limit:
+            parts.append(current.strip())
+            current = sent
+        else:
+            current = (current + " " + sent).strip()
+    if current:
+        parts.append(current.strip())
+    return parts
+
+
+def paginate(paras, items, max_lines=11, chars_per_line=95):
+    """Раскладывает абзацы и пункты по слайдам, чтобы текст не залезал на блок конспекта."""
+    chunks = []
+    cur_paras, cur_items = [], []
+    lines = 0.0
+
+    def flush():
+        nonlocal cur_paras, cur_items, lines
+        if cur_paras or cur_items:
+            chunks.append((cur_paras, cur_items))
+            cur_paras, cur_items, lines = [], [], 0.0
+
+    for p in paras:
+        for part in split_paragraph(p):
+            need = max(1, (len(part) + chars_per_line - 1) // chars_per_line) + 0.4
+            if lines + need > max_lines:
+                flush()
+            cur_paras.append(part)
+            lines += need
+
+    for item in items:
+        need = max(1, (len(item) + chars_per_line - 1) // chars_per_line) + 0.3
+        if lines + need > max_lines:
+            flush()
+        cur_items.append(item)
+        lines += need
+
+    flush()
+    return chunks
+
+
+def split_items(items, max_items=9):
+    """Делит пункты на сбалансированные части, чтобы не было слайдов с одним пунктом."""
+    if not items:
+        return []
+    if len(items) <= max_items:
+        return [items]
+    parts = (len(items) + max_items - 1) // max_items
+    size = (len(items) + parts - 1) // parts
+    return [items[i:i + size] for i in range(0, len(items), size)]
+
+
 # ---------------- low-level helpers ----------------
 def _set_fill(shape, color):
     shape.fill.solid()
@@ -153,10 +212,11 @@ def header_band(slide, kicker, title, accent=ACCENT):
     _, tf = add_text(slide, Inches(0.55), Inches(0.14), Inches(12.2), Inches(0.4), anchor=MSO_ANCHOR.MIDDLE)
     para(tf, kicker.upper(), size=12, color=RGBColor(0x9F, 0xC5, 0xE6), bold=True, first=True, space_after=0)
     _, tf2 = add_text(slide, Inches(0.55), Inches(0.52), Inches(12.2), Inches(0.6), anchor=MSO_ANCHOR.MIDDLE)
-    para(tf2, title, size=27, color=WHITE, bold=True, first=True, space_after=0)
+    size = 27 if len(title) <= 55 else (23 if len(title) <= 75 else 20)
+    para(tf2, title, size=size, color=WHITE, bold=True, first=True, space_after=0)
 
 
-def conspect_box(slide, items, y=Inches(5.35), h=Inches(1.75), x=Inches(0.55), w=Inches(12.25)):
+def conspect_box(slide, items, y=Inches(5.55), h=Inches(1.7), x=Inches(0.55), w=Inches(12.25)):
     """ЧТО ЗАКОНСПЕКТИРОВАТЬ callout box."""
     box = add_rect(slide, x, y, w, h, CONSPECT_FILL, line_color=CONSPECT_BORDER, line_w=Pt(1.25), round_=True)
     # left accent bar
@@ -165,7 +225,11 @@ def conspect_box(slide, items, y=Inches(5.35), h=Inches(1.75), x=Inches(0.55), w
                      anchor=MSO_ANCHOR.TOP)
     para(tf, "ЧТО ЗАКОНСПЕКТИРОВАТЬ \u2014 запомни и запиши в конспект:", size=13, color=CONSPECT_BORDER,
          bold=True, first=True, space_after=4)
-    bullets(tf, items, size=13, color=CONSPECT_TEXT, bullet_char="\u25AA", space_after=3,
+    items = list(items)
+    if len(items) > 2 and sum(len(i) for i in items) > 320:
+        items = items[:2]
+    size = 12 if len(items) >= 3 or sum(len(i) for i in items) > 260 else 13
+    bullets(tf, items, size=size, color=CONSPECT_TEXT, bullet_char="\u25AA", space_after=3,
             space_before=0, first=False, line=1.0)
     return box
 
@@ -423,42 +487,86 @@ def split_sections(md_path):
 
 # ---------------- presentation building ----------------
 def clean_md(text):
+    text = re.sub(r"`([^`]*)`", r"\1", text)
+    text = text.replace("`", "")
+    text = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"\1", text)
     return re.sub(r"\*\*", "", text).strip()
 
 
-def extract_conspect(text_blocks):
-    """Pull bolded terms and short definition-ish sentences for the конспект box."""
-    terms = []
+_CONSPECT_STOP = {
+    "проблема", "зачем", "пример", "примечание", "важно", "итог", "вывод",
+    "цель", "план", "тема", "аудитория", "материалы", "резюме", "вопрос",
+}
+
+
+def _shorten(text, limit=175):
+    text = clean_md(text).strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    pos = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+    if pos >= 60:
+        return cut[:pos + 1]
+    pos = cut.rfind(" ")
+    return (cut[:pos] if pos > 0 else cut).rstrip(" ,;:-") + "\u2026"
+
+
+def extract_conspect(text_blocks, topic=None):
+    """Выбирает определения и термины для блока «ЧТО ЗАКОНСПЕКТИРОВАТЬ»."""
+    topic_words = {w.lower() for w in re.findall(r"[А-Яа-яЁёA-Za-z]{5,}", topic or "")}
+    found = []
+    seen = set()
+    order = 0
+
+    def add(text, score):
+        nonlocal order
+        text = _shorten(text)
+        key = text.lower()[:70]
+        if not text or key in seen:
+            return
+        seen.add(key)
+        found.append((order, score, text))
+        order += 1
+
     for (_t, content) in text_blocks:
-        if isinstance(content, list):
-            joined = " ".join(content)
-        else:
-            joined = content
-        for m in re.finditer(r"\*\*(.+?)\*\*", joined):
-            t = clean_md(m.group(1))
-            if 3 < len(t) < 60 and t not in terms:
-                terms.append(t)
-    # definition sentences
-    defs = []
-    for (_t, content) in text_blocks:
-        if isinstance(content, list):
-            joined = " ".join(content)
-        else:
-            joined = content
-        for sent in re.split(r"(?<=[.!?])\s+", joined):
-            s = clean_md(sent).strip()
-            if len(s) < 120 and any(k in s.lower() for k in ["\u2014 это", "это ", "представляет", "является", "зачем", "обязателен", "нормальный способ"]):
-                if s not in defs:
-                    defs.append(s)
-    items = []
-    for d in defs[:4]:
-        items.append(d)
-    for t in terms:
-        if len(items) >= 7:
-            break
-        if t not in items:
-            items.append(t)
-    return items[:7]
+        chunks = content if isinstance(content, list) else [content]
+        for chunk in chunks:
+            s = clean_md(chunk).strip()
+            if not s:
+                continue
+
+            # пункт-определение: «Термин: ...» или «<tag>: ...»
+            m = re.match(r"^(<[^>]+>|[А-ЯЁA-Z][^:]{2,45}):\s+(.+)$", s)
+            if m:
+                term = m.group(1).strip()
+                if term.lower() not in _CONSPECT_STOP and len(m.group(2)) >= 12:
+                    add(s, 4)
+
+            for sent in re.split(r"(?<=[.!?])\s+", s):
+                sent = clean_md(sent).strip()
+                if not sent:
+                    continue
+                low = sent.lower()
+                score = 0
+                if re.search(r"\s[\u2014\u2013-]\s+это\b", low):
+                    score += 6
+                if any(k in low for k in ("называется", "представляет собой", "является", "определяет")):
+                    score += 3
+                if topic_words and sum(1 for w in topic_words if w in low) >= max(1, len(topic_words) // 2):
+                    score += 2
+                if 60 <= len(sent) <= 220:
+                    score += 1
+                if len(sent) < 30 or sent.endswith("?"):
+                    score -= 3
+                if re.match(r"^(это|этот|эта|эти|он|она|они|такой|такая|такие|представьте|например|допустим)\b", low):
+                    score -= 4
+                if "<" in sent:
+                    score -= 4
+                if score >= 3:
+                    add(sent, score)
+
+    top = sorted(found, key=lambda x: (-x[1], x[0]))[:3]
+    return [text for _order, _score, text in sorted(top, key=lambda x: x[0])]
 
 
 def build_lecture_pptx(data, out_path):
@@ -469,14 +577,15 @@ def build_lecture_pptx(data, out_path):
 
     num = data["number"] or 0
     title = data["title"]
-    kicker = f"ЛЕКЦИЯ {num} \u00b7 РАЗДЕЛ 5. RЕACT"
+    section_label = data.get("section_label", "Учебный курс")
+    kicker = f"ЛЕКЦИЯ {num} \u00b7 {section_label.upper()}"
 
     # ---------- title slide ----------
     s = prs.slides.add_slide(blank)
     add_rect(s, 0, 0, SLIDE_W, SLIDE_H, NAVY)
     add_rect(s, 0, Inches(4.6), SLIDE_W, Inches(0.06), ACCENT)
     _, tf = add_text(s, Inches(0.9), Inches(1.5), Inches(11.5), Inches(1.2), anchor=MSO_ANCHOR.MIDDLE)
-    para(tf, "ИП 242 / ИП 245 / ИП 246 \u00b7 Раздел 5. React \u00b7 2 академических часа (90 мин)", size=15,
+    para(tf, data.get("meta_line", f"{section_label} \u00b7 2 академических часа (90 мин)"), size=15,
          color=RGBColor(0xBF, 0xD4, 0xE8), bold=True, first=True, space_after=0)
     _, tf = add_text(s, Inches(0.9), Inches(2.35), Inches(11.5), Inches(1.6), anchor=MSO_ANCHOR.MIDDLE)
     para(tf, f"Лекция {num}", size=40, color=RGBColor(0x9F, 0xC5, 0xE6), bold=True, first=True, space_after=2)
@@ -498,7 +607,7 @@ def build_lecture_pptx(data, out_path):
     header_band(s, "Аудитория", "Кому предназначена лекция")
     _, tf = add_text(s, Inches(0.55), Inches(1.55), Inches(12.25), Inches(3.4), anchor=MSO_ANCHOR.TOP)
     para(tf, data["audience"], size=18, color=INK, first=True, space_after=0, line=1.15)
-    conspect_box(s, ["Требования: пройдены предыдущие лекции раздела React."], y=Inches(5.35), h=Inches(1.6))
+    conspect_box(s, [f"Требования: пройдены предыдущие лекции ({section_label})."], y=Inches(5.35), h=Inches(1.6))
 
     # ---------- agenda ----------
     s = prs.slides.add_slide(blank)
@@ -514,76 +623,97 @@ def build_lecture_pptx(data, out_path):
         # section header slide
         s = prs.slides.add_slide(blank)
         header_band(s, f"Раздел лекции {num}", sub["title"])
-        _, tf = add_text(s, Inches(0.55), Inches(1.6), Inches(12.25), Inches(3.3), anchor=MSO_ANCHOR.TOP)
-        para(tf, sub["title"], size=20, color=ACCENT, bold=True, first=True, space_after=8, line=1.1)
-        para(tf, "Ниже \u2014 разбор по пунктам с примерами кода. Каждый слайд содержит блок конспекта.",
-             size=14, color=MUTED, space_after=0, line=1.1)
+        _, tf = add_text(s, Inches(0.55), Inches(1.6), Inches(12.25), Inches(3.5), anchor=MSO_ANCHOR.TOP)
+        generic = {"пример", "пример кода", "код"}
+        subtopics = []
+        seen_topics = set()
+        for t, c in sub["blocks"]:
+            if t != "subhead" or not c or not c[0].strip():
+                continue
+            item = clean_md(c[0]).strip()
+            key = item.lower().rstrip(":")
+            if key in generic or key in seen_topics:
+                continue
+            seen_topics.add(key)
+            subtopics.append(item)
+        if subtopics:
+            para(tf, "Что разберём в этом разделе:", size=17, color=ACCENT, bold=True, first=True,
+                 space_after=10, line=1.1)
+            bullets(tf, subtopics[:7], size=16, space_after=6, line=1.05)
+        else:
+            para(tf, "Ключевые понятия, примеры и практические приёмы по теме раздела.",
+                 size=17, color=MUTED, first=True, space_after=0, line=1.15)
         conspect_box(s, [f"{sub['title']} \u2014 ключевая тема раздела."], y=Inches(5.35), h=Inches(1.6))
 
-        # group blocks into slides
-        pending_para = []
-        pending_bullets = []
-        pending_table = []
-        pending_code = []
-
-        def flush_pending():
-            nonlocal pending_para, pending_bullets, pending_table, pending_code
-            if pending_bullets:
-                _bullet_slide(prs, blank, sub["title"], pending_bullets, num)
-                pending_bullets = []
-            if pending_para:
-                _para_slide(prs, blank, sub["title"], pending_para, num)
-                pending_para = []
-            if pending_table:
-                _table_slide(prs, blank, sub["title"], pending_table, num)
-                pending_table = []
-            if pending_code:
-                _code_slides(prs, blank, sub["title"], pending_code, num)
-                pending_code = []
-
+        # группируем блоки по подзаголовкам: один подзаголовок = одна тема
+        groups = []
+        current_title = None
+        current_blocks = []
         for btype, content in sub["blocks"]:
-            if btype == "bullets":
-                if pending_para:
-                    flush_pending()
-                pending_bullets.extend(content)
-            elif btype == "para":
-                if pending_bullets:
-                    flush_pending()
-                pending_para.extend(content)
-            elif btype == "table":
-                flush_pending()
-                pending_table.extend(content)
-                flush_pending()
-            elif btype == "code":
-                if pending_para or pending_bullets:
-                    flush_pending()
-                pending_code.extend(content)
-                if len(pending_code) >= 22:
-                    flush_pending()
-        flush_pending()
+            if btype == "subhead":
+                title = content[0]
+                key = clean_md(title).lower().rstrip(":")
+                if key in {"пример", "пример кода", "код"}:
+                    if current_title is None:
+                        current_title = "Примеры"
+                    continue
+                if current_title is not None or current_blocks:
+                    groups.append((current_title, current_blocks))
+                current_title = title
+                current_blocks = []
+            else:
+                current_blocks.append((btype, content))
+        if current_title is not None or current_blocks:
+            groups.append((current_title, current_blocks))
+
+        for group_title, group_blocks in groups:
+            paras = []
+            items = []
+            tables = []
+            codes = []
+            for btype, content in group_blocks:
+                if btype == "para":
+                    paras.extend(content)
+                elif btype == "bullets":
+                    items.extend(content)
+                elif btype == "table":
+                    tables.append(content)
+                elif btype == "code":
+                    codes.append(content)
+
+            # текстовые слайды: пагинация по высоте, чтобы не залезать на блок конспекта
+            for para_chunk, item_chunk in paginate(paras, items):
+                _group_slide(prs, blank, sub["title"], group_title, para_chunk, item_chunk, num)
+
+            for rows in tables:
+                _table_slide(prs, blank, group_title or sub["title"], rows, num)
+
+            for code in codes:
+                _code_slides(prs, blank, group_title or sub["title"], code, num)
 
     # ---------- summary ----------
-    s = prs.slides.add_slide(blank)
-    header_band(s, "Резюме", "Что запомнить с лекции")
-    conspect_items = [clean_md(x) for x in data["summary"]]
-    if not conspect_items:
-        conspect_items = ["Основные определения лекции см. в блоках \u201cЧТО ЗАКОНСПЕКТИРОВАТЬ\u201d на слайдах выше."]
-    _, tf = add_text(s, Inches(0.55), Inches(1.55), Inches(12.25), Inches(3.5), anchor=MSO_ANCHOR.TOP)
-    bullets(tf, conspect_items, size=16, first=True, space_after=6, line=1.08, bold_lead=True)
-    conspect_box(s, conspect_items[:7], y=Inches(5.35), h=Inches(1.6))
+    summary_items = [clean_md(x) for x in data["summary"]]
+    if not summary_items:
+        summary_items = ["Основные определения лекции см. в блоках \u201cЧТО ЗАКОНСПЕКТИРОВАТЬ\u201d на слайдах выше."]
+    for idx, chunk in enumerate(split_items(summary_items, max_items=6)):
+        s = prs.slides.add_slide(blank)
+        header_band(s, "Резюме", "Что запомнить с лекции" if idx == 0 else "Что запомнить (продолжение)")
+        _, tf = add_text(s, Inches(0.55), Inches(1.55), Inches(12.25), Inches(5.3), anchor=MSO_ANCHOR.TOP)
+        bullets(tf, chunk, size=16, first=True, space_after=7, line=1.08, bold_lead=True)
 
     # ---------- control questions ----------
-    s = prs.slides.add_slide(blank)
-    header_band(s, "Контрольные вопросы", "Для самопроверки")
     qs = data["questions"] or ["Нет контрольных вопросов в источнике."]
-    _, tf = add_text(s, Inches(0.55), Inches(1.55), Inches(12.25), Inches(3.5), anchor=MSO_ANCHOR.TOP)
-    bullets(tf, qs, size=15, first=True, space_after=5, line=1.05, bullet_char="\u2794")
-    conspect_box(s, ["Ответить на все вопросы \u2014 критерий завершения лекции."], y=Inches(5.35), h=Inches(1.6))
+    for idx, chunk in enumerate(split_items(qs, max_items=6)):
+        s = prs.slides.add_slide(blank)
+        header_band(s, "Контрольные вопросы", "Для самопроверки" if idx == 0 else "Для самопроверки (продолжение)")
+        _, tf = add_text(s, Inches(0.55), Inches(1.55), Inches(12.25), Inches(3.5), anchor=MSO_ANCHOR.TOP)
+        bullets(tf, chunk, size=15, first=True, space_after=5, line=1.05, bullet_char="\u2794")
+        conspect_box(s, ["Ответить на все вопросы \u2014 критерий завершения лекции."])
 
     # ---------- materials ----------
     s = prs.slides.add_slide(blank)
     header_band(s, "Материалы презентации", "Исходники и ссылки")
-    mats = data["materials"] or ["Полный код примера \u2014 в репозитории раздела React."]
+    mats = data["materials"] or [f"Конспект и примеры кода \u2014 в материалах {section_label}."]
     _, tf = add_text(s, Inches(0.55), Inches(1.55), Inches(12.25), Inches(3.4), anchor=MSO_ANCHOR.TOP)
     bullets(tf, mats, size=16, first=True, space_after=6, line=1.08)
     conspect_box(s, ["Материалы презентации \u2014 ссылки и код для самостоятельного изучения."],
@@ -598,9 +728,8 @@ def _bullet_slide(prs, layout, section_title, items, num):
     header_band(s, f"Раздел лекции {num}", section_title)
     _, tf = add_text(s, Inches(0.55), Inches(1.5), Inches(7.6), Inches(3.9), anchor=MSO_ANCHOR.TOP)
     bullets(tf, items, size=15, first=True, space_after=5, line=1.05)
-    conspect_items = extract_conspect([("bullets", items)])
-    conspect_box(s, conspect_items if conspect_items else ["Ключевые термины раздела."],
-                 y=Inches(5.55), h=Inches(1.55))
+    conspect_items = extract_conspect([("bullets", items)], topic=section_title)
+    conspect_box(s, conspect_items if conspect_items else ["Ключевые термины раздела."])
     return s
 
 
@@ -613,34 +742,72 @@ def _para_slide(prs, layout, section_title, paras, num):
         if p.strip():
             para(tf, p, size=15, first=first, space_after=7, line=1.1)
             first = False
-    conspect_items = extract_conspect([("para", paras)])
-    conspect_box(s, conspect_items if conspect_items else ["Ключевые термины раздела."],
-                 y=Inches(5.55), h=Inches(1.55))
+    conspect_items = extract_conspect([("para", paras)], topic=section_title)
+    conspect_box(s, conspect_items if conspect_items else ["Ключевые термины раздела."])
+    return s
+
+
+def _group_slide(prs, layout, section_title, group_title, paras, items, num):
+    s = prs.slides.add_slide(layout)
+    header_band(s, f"Раздел лекции {num}", group_title or section_title)
+    _, tf = add_text(s, Inches(0.55), Inches(1.5), Inches(12.25), Inches(3.9), anchor=MSO_ANCHOR.TOP)
+    first = True
+    for p in paras:
+        if p.strip():
+            para(tf, p, size=15, first=first, space_after=7, line=1.1)
+            first = False
+    if items:
+        bullets(tf, items, size=14 if len(items) > 7 else 15, first=first, space_after=5, line=1.05)
+    conspect_items = extract_conspect([("para", paras), ("bullets", items)], topic=group_title or section_title)
+    conspect_box(s, conspect_items if conspect_items else ["Ключевые термины раздела."])
     return s
 
 
 def _table_slide(prs, layout, section_title, rows, num):
     s = prs.slides.add_slide(layout)
     header_band(s, f"Раздел лекции {num}", section_title)
-    _, tf = add_text(s, Inches(0.55), Inches(1.5), Inches(12.25), Inches(4.0), anchor=MSO_ANCHOR.TOP)
-    first = True
+    clean_rows = []
     for row in rows:
         cells = [c.strip().strip("|").strip() for c in row.strip().strip("|").split("|")]
-        line = " | ".join(cells)
-        para(tf, line, size=13, first=first, space_after=3, line=1.05)
-        first = False
+        if not cells or all(re.fullmatch(r":?-{2,}:?", c or "") for c in cells):
+            continue
+        clean_rows.append(cells)
+    if not clean_rows:
+        return s
+    ncols = max(len(r) for r in clean_rows)
+    clean_rows = [r + [""] * (ncols - len(r)) for r in clean_rows]
+    top = Inches(1.5)
+    height = min(Inches(3.9), Inches(0.45) * len(clean_rows))
+    table_shape = s.shapes.add_table(len(clean_rows), ncols, Inches(0.55), top, Inches(12.25), height)
+    table = table_shape.table
+    for ci in range(ncols):
+        table.columns[ci].width = Inches(12.25 / ncols)
+    for ri, row in enumerate(clean_rows):
+        for ci, value in enumerate(row):
+            cell = table.cell(ri, ci)
+            cell.text = clean_md(value)
+            for p in cell.text_frame.paragraphs:
+                p.font.size = Pt(11 if ri else 11.5)
+                p.font.name = "Segoe UI"
+                p.font.bold = ri == 0
+                p.font.color.rgb = WHITE if ri == 0 else INK
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = NAVY if ri == 0 else (RGBColor(0xF2, 0xF4, 0xF8) if ri % 2 else WHITE)
     conspect_box(s, ["Таблица \u2014 справочник ключевых значений раздела."], y=Inches(5.55), h=Inches(1.55))
     return s
 
 
 def _code_slides(prs, layout, section_title, lines, num):
     """Split code into chunks; each chunk = one slide with header + code + conspect."""
-    chunk_size = 24
+    chunk_size = 18
+    base_title = section_title.rstrip(" :")
     for start in range(0, len(lines), chunk_size):
         chunk = lines[start:start + chunk_size]
         s = prs.slides.add_slide(layout)
-        header_band(s, f"Раздел лекции {num}", section_title + (" \u00b7 код" if start == 0 else " \u00b7 код (продолжение)"))
-        code_box(s, Inches(0.55), Inches(1.5), Inches(12.25), Inches(3.9), chunk, size=10.5)
+        header_band(s, f"Раздел лекции {num}", base_title + (" \u00b7 код" if start == 0 else " \u00b7 код (продолжение)"))
+        max_len = max((len(line) for line in chunk), default=0)
+        size = 10.5 if max_len <= 115 else (9.5 if max_len <= 130 else 8.5)
+        code_box(s, Inches(0.55), Inches(1.5), Inches(12.25), Inches(3.9), chunk, size=size)
         conspect_box(s, ["Пример кода \u2014 повторить структуру и имена сущностей в конспекте."],
                      y=Inches(5.55), h=Inches(1.55))
 
